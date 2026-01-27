@@ -370,48 +370,35 @@
             trial.data.largerSide = lastSpec.largerSide;
           }
         },
-        on_finish: function(data) {
-          const key = data.response;
-          const left = data.leftCount;
-          const right = data.rightCount;
+       on_finish: function() {
 
-          let correct = 0;
-          if (left > right && key === 'f') correct = 1;
-          if (right > left && key === 'j') correct = 1;
+  // Get only response trials
+  const responses = jsPsych.data.get().filter({ trial_type: 'response' });
 
-          data.accuracy = correct;
-          data.choice = (key === 'f' ? 'left' : (key === 'j' ? 'right' : 'none'));
-        }
-      }
-    ];
+  const attempted = responses.count();
+  const correct = responses.filter({ accuracy: 1 }).count();
 
-    timeline.push(trialLoop);
+  // Engagement & persistence
+  const engagement = correct;
+  const persistence = attempted > 0 ? correct / attempted : 0;
 
-    // End screen
-    timeline.push({
-      type: 'html-keyboard-response',
-      stimulus: `<h3>Thanks — task complete!</h3><p>Press any key to return to the survey.</p>`,
-      choices: jsPsych.ALL_KEYS,
-      on_start: function() {
-        document.getElementById('stop-button').style.display = 'none';
-        clearInterval(timerInterval);
-      }
-    });
+  // Attach summary to all rows
+  jsPsych.data.addProperties({
+    engagement: engagement,
+    persistence: persistence,
+    attempted: attempted,
+    correct: correct
+  });
 
-    // Initialize jsPsych
-    jsPsych.init({
-      timeline: timeline,
-      display_element: 'jspsych-target',
-      on_finish: function() {
+  // OPTIONAL: local CSV (fine for piloting)
+  jsPsych.data.localSave('csv', 'ans_data.csv');
 
-        // OPTIONAL: local CSV download (fine for piloting)
-        jsPsych.data.localSave('csv', 'ans_data.csv');
-
-        // Redirect back to Qualtrics
-        const qlink = "https://YOURORG.qualtrics.com/jfe/form/SV_XXXXXXX";
-        window.location.href = qlink + "?ans_done=1&pid=" + encodeURIComponent(pid);
-      }
-    });
-  </script>
-</body>
-</html>
+  // Redirect back to Qualtrics
+  const qlink = "https://YOURORG.qualtrics.com/jfe/form/SV_XXXXXXX";
+  window.location.href =
+    qlink +
+    "?ans_done=1" +
+    "&pid=" + encodeURIComponent(pid) +
+    "&engagement=" + engagement +
+    "&persistence=" + persistence;
+}

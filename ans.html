@@ -50,7 +50,7 @@
     // ===========================
 
     // ------- Parameters (tweak as needed) -------
-    const taskDurationMinutes = 1; // Total task duration in minutes
+    const taskDurationMinutes = 5; // Total task duration in minutes
     const taskDurationMs = taskDurationMinutes * 60 * 1000; // Convert to milliseconds
     const stimDuration = 1000; // ms - stimulus display time
     const fixationDuration = 500; // ms
@@ -270,7 +270,7 @@
           clearInterval(timerInterval);
 
           // Redirect back to Qualtrics even if they stop early (still flags it as done=0)
-          const qlink = "YOUR_QUALTRICS_LINK_HERE";
+          const qlink = "https://YOURORG.qualtrics.com/jfe/form/SV_XXXXXXX";
           window.location.href = qlink + "?ans_done=0&pid=" + encodeURIComponent(pid);
         };
       }
@@ -408,7 +408,7 @@
         jsPsych.data.localSave('csv', 'ans_data.csv');
 
         // Redirect back to Qualtrics
-        const qlink = "YOUR_QUALTRICS_LINK_HERE";
+        const qlink = "https://YOURORG.qualtrics.com/jfe/form/SV_XXXXXXX";
         window.location.href = qlink + "?ans_done=1&pid=" + encodeURIComponent(pid);
       }
     });

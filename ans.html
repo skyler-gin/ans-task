@@ -2,33 +2,31 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>ANS Task</title>
 
-  <!-- jsPsych core -->
+  <!-- jsPsych v6.3.1 -->
   <script src="https://unpkg.com/jspsych@6.3.1/jspsych.js"></script>
-  <link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet">
-
-  <!-- Plugins -->
   <script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-html-keyboard-response.js"></script>
   <script src="https://unpkg.com/jspsych@6.3.1/plugins/jspsych-canvas-keyboard-response.js"></script>
+  <link href="https://unpkg.com/jspsych@6.3.1/css/jspsych.css" rel="stylesheet" />
 
   <style>
+    body { background: white; margin: 0; }
     #stop-button {
       position: fixed;
-      bottom: 20px;
+      bottom: 18px;
       left: 50%;
       transform: translateX(-50%);
-      padding: 10px 20px;
-      background-color: #d9534f;
+      padding: 12px 22px;
+      font-size: 16px;
+      background: #d9534f;
       color: white;
       border: none;
-      border-radius: 5px;
-      font-size: 16px;
+      border-radius: 6px;
       cursor: pointer;
-      z-index: 9999;
       display: none;
+      z-index: 9999;
     }
-    #stop-button:hover { background-color: #c9302c; }
+    #stop-button:hover { filter: brightness(0.95); }
   </style>
 </head>
 
@@ -36,379 +34,412 @@
   <div id="jspsych-target"></div>
   <button id="stop-button">Stop Task</button>
 
-  <script>
-    // ===========================
-    // Qualtrics ID hookup
-    // ===========================
-    const params = new URLSearchParams(window.location.search);
-    const pid = params.get('pid') || 'no_pid';
+<script>
+/* =======================
+   REQUIRED LINKS (YOU PROVIDED)
+   ======================= */
+const DATA_ENDPOINT =
+  "https://script.google.com/macros/s/AKfycbw13aJQQSF-uMwviOHrDCFGkPd57qozYNkiPTDNB5m9EmrmP3EvNK7PGNhQCGNwhxkx/exec";
 
-    // Attach pid to all rows
-    jsPsych.data.addProperties({ pid });
+const QUALTRICS_RETURN_URL =
+  "https://brown.co1.qualtrics.com/jfe/form/SV_9KPQJgVkpEZkhN4";
 
-    // ===========================
-    // ANS Task (jsPsych)
-    // ===========================
+/* =======================
+   PID FROM QUALTRICS
+   ======================= */
+const params = new URLSearchParams(window.location.search);
+const pid = params.get("pid") || "NO_PID";
 
-    // ---- Timing ----
-    const REQUIRED_MINUTES = 1;   // required portion (always runs)
-    const MAX_MINUTES = 10;       // hard cap (safety)
-    const stimDuration = 1000;
-    const fixationDuration = 500;
-    const isiDuration = 250;
+/* =======================
+   TASK SETTINGS
+   ======================= */
+const REQUIRED_MINUTES = 1;          // required block length
+const MAX_TOTAL_MINUTES = 10;        // hard cap if they keep opting in
+const CHECKPOINT_EVERY_MIN = 1;      // ask each minute if they want to continue
 
-    // ---- Display ----
-    const canvasSize = { w: 1200, h: 600 };
-    const dividerMargin = 20;
-    const leftArea = { x: 0, y: 0, w: (canvasSize.w/2) - dividerMargin, h: canvasSize.h };
-    const rightArea = { x: (canvasSize.w/2) + dividerMargin, y: 0, w: (canvasSize.w/2) - dividerMargin, h: canvasSize.h };
+const responseKeys = ['f','j'];      // F left, J right
 
-    // ---- Dots ----
-    const dotRadiusRange = [4, 12];
-    const minDotSpacing = 2;
-    const numerosityRange = [6, 40];
-    const ratios = [1.1, 1.2, 1.5, 2];
-    const responseKeys = ['f','j']; // f = left, j = right
+// Timing (ms)
+const fixationMs = 400;
+const stimMs = 650;
+const isiMs = 200;
 
-    // ---- State ----
-    let taskStartTime = null;
-    let requiredEndTime = null;
-    let hardEndTime = null;
-    let shouldStopTask = false;
-    let timerInterval = null;
-    let lastSpec = null;
+// Canvas
+const canvasW = 900;
+const canvasH = 450;
+const dividerMargin = 16;
 
-    // Helpers
-    function rint(min, max) { return Math.floor(Math.random()*(max-min+1)) + min; }
-    function choice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+const leftBox = { x: 0, y: 0, w: canvasW/2 - dividerMargin, h: canvasH };
+const rightBox = { x: canvasW/2 + dividerMargin, y: 0, w: canvasW/2 - dividerMargin, h: canvasH };
 
-    function generateDotPositions(count, bbox, radiiRange, minSpacing, maxAttemptsPerDot=300) {
-      const dots = [];
-      const maxR = radiiRange[1];
-      const minR = radiiRange[0];
+const dotRadiusRange = [4, 10];
+const numerosityRange = [6, 40];
+const ratios = [1.1, 1.2, 1.5, 2];
 
-      const safeMinX = bbox.x + maxR;
-      const safeMaxX = bbox.x + bbox.w - maxR;
-      const safeMinY = bbox.y + maxR;
-      const safeMaxY = bbox.y + bbox.h - maxR;
+/* =======================
+   STATE
+   ======================= */
+let attempted = 0;
+let correct = 0;
+let lastSpec = null;
 
-      if (safeMinX >= safeMaxX || safeMinY >= safeMaxY) return [];
+let taskStart = null;
+let blockStart = null;
+let requiredEnd = null;
+let hardEnd = null;
 
-      for (let i = 0; i < count; i++) {
-        let placed = false;
-        let attempts = 0;
+let shouldStop = false;
 
-        while (!placed && attempts < maxAttemptsPerDot) {
-          attempts++;
-          const r = rint(minR, maxR);
+/* =======================
+   HELPERS
+   ======================= */
+function rint(min, max) { return Math.floor(Math.random()*(max-min+1)) + min; }
+function choice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
-          const minX = bbox.x + r;
-          const maxX = bbox.x + bbox.w - r;
-          const minY = bbox.y + r;
-          const maxY = bbox.y + bbox.h - r;
-          if (minX > maxX || minY > maxY) continue;
+function generateDots(count, bbox, radiiRange, maxAttemptsPerDot=250) {
+  const dots = [];
+  const minR = radiiRange[0], maxR = radiiRange[1];
 
-          const x = rint(Math.ceil(minX), Math.floor(maxX));
-          const y = rint(Math.ceil(minY), Math.floor(maxY));
+  for (let i=0; i<count; i++){
+    let placed=false;
+    for (let a=0; a<maxAttemptsPerDot && !placed; a++){
+      const r = rint(minR, maxR);
+      const x = rint(Math.ceil(bbox.x + r), Math.floor(bbox.x + bbox.w - r));
+      const y = rint(Math.ceil(bbox.y + r), Math.floor(bbox.y + bbox.h - r));
 
-          let ok = true;
-          for (const d of dots) {
-            const dx = d.x - x, dy = d.y - y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist < (d.r + r + minSpacing)) { ok = false; break; }
-          }
-          if (ok) { dots.push({x, y, r}); placed = true; }
-        }
-
-        if (!placed) {
-          // fallback: smallest dot at center
-          const r = minR;
-          const cx = bbox.x + bbox.w/2;
-          const cy = bbox.y + bbox.h/2;
-          dots.push({x: cx, y: cy, r});
-        }
+      let ok=true;
+      for (const d of dots){
+        const dx = d.x - x, dy = d.y - y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < (d.r + r + 2)) { ok=false; break; }
       }
-      return dots;
-    }
-
-    function makeTrial() {
-      const ratio = choice(ratios);
-
-      let base = rint(numerosityRange[0], numerosityRange[1]);
-      let larger = Math.round(base * ratio);
-
-      if (larger < numerosityRange[0]) {
-        base = Math.ceil(numerosityRange[0] / ratio);
-        larger = Math.round(base * ratio);
-      } else if (larger > numerosityRange[1]) {
-        base = Math.floor(numerosityRange[1] / ratio);
-        larger = Math.round(base * ratio);
-      }
-
-      base = Math.max(numerosityRange[0], Math.min(numerosityRange[1], base));
-      larger = Math.max(numerosityRange[0], Math.min(numerosityRange[1], larger));
-
-      const leftIsLarger = Math.random() < 0.5;
-      const leftCount = leftIsLarger ? larger : base;
-      const rightCount = leftIsLarger ? base : larger;
-
-      return {
-        leftCount,
-        rightCount,
-        ratio: (leftCount > rightCount) ? (leftCount/rightCount) : (rightCount/leftCount),
-        largerSide: leftIsLarger ? 'left' : 'right',
-        leftDots: generateDotPositions(leftCount, leftArea, dotRadiusRange, minDotSpacing),
-        rightDots: generateDotPositions(rightCount, rightArea, dotRadiusRange, minDotSpacing)
-      };
-    }
-
-    function updateTimeChecks() {
-      const now = Date.now();
-      if (now >= hardEndTime) {
-        shouldStopTask = true;
-        clearInterval(timerInterval);
-        jsPsych.endCurrentTimeline();
+      if (ok){
+        dots.push({x,y,r});
+        placed=true;
       }
     }
-
-    function canContinueTrials() {
-      const now = Date.now();
-      return !shouldStopTask && now < hardEndTime;
+    if (!placed){
+      // fallback: still place something (rare)
+      dots.push({x: bbox.x + bbox.w/2, y: bbox.y + bbox.h/2, r: minR});
     }
+  }
+  return dots;
+}
 
-    function showEndMessage(extraText = "") {
-      document.body.innerHTML = `
-        <div style="text-align:center; margin-top:90px; font-family:Arial;">
-          <h2>You’re all set!</h2>
-          <p>${extraText}</p>
-          <p style="color:gray; font-size:14px;">
-            Please return to the Qualtrics tab and continue the survey.
-          </p>
-        </div>
-      `;
-    }
+function makeTrial() {
+  const ratio = choice(ratios);
 
-    // ===========================
-    // Build timeline
-    // ===========================
-    const timeline = [];
+  let base = rint(numerosityRange[0], numerosityRange[1]);
+  let larger = Math.round(base * ratio);
 
-    // Instructions + start
-    timeline.push({
-      type: 'html-keyboard-response',
-      stimulus: `
-        <h3>Approximate Number System (ANS) Task</h3>
-        <p>Two dot arrays will flash briefly (left and right).</p>
-        <p>Press <strong>F</strong> if the <strong>left</strong> side had more dots, or <strong>J</strong> if the <strong>right</strong> side had more dots.</p>
-        <p><strong>Required portion:</strong> ${REQUIRED_MINUTES} minute.</p>
-        <p>After that, you may choose to continue with additional optional trials or stop at any time.</p>
-        <p><em>Press any key to begin.</em></p>
-      `,
-      choices: jsPsych.ALL_KEYS,
-      on_finish: function() {
-        taskStartTime = Date.now();
-        requiredEndTime = taskStartTime + REQUIRED_MINUTES * 60 * 1000;
-        hardEndTime = taskStartTime + MAX_MINUTES * 60 * 1000;
+  // keep within bounds
+  if (larger > numerosityRange[1]) {
+    base = Math.floor(numerosityRange[1] / ratio);
+    larger = Math.round(base * ratio);
+  }
+  if (larger < numerosityRange[0]) {
+    base = Math.ceil(numerosityRange[0] / ratio);
+    larger = Math.round(base * ratio);
+  }
 
-        shouldStopTask = false;
+  base = Math.max(numerosityRange[0], Math.min(numerosityRange[1], base));
+  larger = Math.max(numerosityRange[0], Math.min(numerosityRange[1], larger));
 
-        document.getElementById('stop-button').style.display = 'block';
+  const leftIsLarger = Math.random() < 0.5;
+  const leftCount = leftIsLarger ? larger : base;
+  const rightCount = leftIsLarger ? base : larger;
 
-        // hard-stop safety timer
-        timerInterval = setInterval(updateTimeChecks, 200);
+  return {
+    leftCount,
+    rightCount,
+    largerSide: leftIsLarger ? "left" : "right",
+    ratio: (leftCount>rightCount) ? leftCount/rightCount : rightCount/leftCount,
+    leftDots: generateDots(leftCount, leftBox, dotRadiusRange),
+    rightDots: generateDots(rightCount, rightBox, dotRadiusRange)
+  };
+}
 
-        // Stop button ends timeline (NO redirect)
-        document.getElementById('stop-button').onclick = function() {
-          shouldStopTask = true;
-          clearInterval(timerInterval);
-          jsPsych.endCurrentTimeline(); // ends the loop cleanly
-        };
-      }
-    });
+/* =======================
+   DATA SENDING (per trial)
+   ======================= */
+function sendRow(row){
+  // fire-and-forget (keep it robust; don’t block the participant)
+  fetch(DATA_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(row)
+  }).catch(()=>{});
+}
 
-    // Trial loop
-    const trialLoop = {
-      timeline: [],
-      loop_function: function() { return canContinueTrials(); }
-    };
+function sendFinalSummary(stoppedFlag){
+  const engagement = correct; // as you defined it
+  const persistence = attempted > 0 ? correct/attempted : 0;
 
-    // One "trial unit"
-    trialLoop.timeline = [
-      // fixation
-      {
-        type: 'html-keyboard-response',
-        stimulus: '<div style="font-size:100px; display:flex; justify-content:center; align-items:center; height:50vh;">+</div>',
-        choices: jsPsych.NO_KEYS,
-        trial_duration: fixationDuration,
-        data: { phase: 'fixation' }
-      },
-      // stimulus
-      {
-        type: 'canvas-keyboard-response',
-        canvas_size: [canvasSize.w, canvasSize.h],
-        stimulus: function(c) {
-          const spec = makeTrial();
-          lastSpec = spec;
+  // send a final summary row too (optional but helpful)
+  sendRow({
+    pid,
+    row_type: "summary",
+    attempted,
+    correct,
+    engagement,
+    persistence,
+    stopped: stoppedFlag ? 1 : 0,
+    timestamp: Date.now()
+  });
 
-          const ctx = c.getContext('2d');
-          ctx.clearRect(0,0,c.width,c.height);
-          ctx.fillStyle = 'white';
-          ctx.fillRect(0,0,c.width,c.height);
+  // redirect back to Qualtrics with summary params
+  const url =
+    QUALTRICS_RETURN_URL +
+    "?pid=" + encodeURIComponent(pid) +
+    "&ans_done=" + (stoppedFlag ? 0 : 1) +
+    "&attempted=" + attempted +
+    "&correct=" + correct +
+    "&engagement=" + engagement +
+    "&persistence=" + persistence +
+    "&stopped=" + (stoppedFlag ? 1 : 0);
 
-          // divider
-          ctx.strokeStyle = '#cccccc';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(c.width/2, 0);
-          ctx.lineTo(c.width/2, c.height);
-          ctx.stroke();
+  window.location.assign(url);
+}
 
-          // dots
-          for (const d of spec.leftDots){
-            ctx.beginPath();
-            ctx.fillStyle = 'black';
-            ctx.arc(d.x, d.y, d.r, 0, 2*Math.PI);
-            ctx.fill();
-          }
-          for (const d of spec.rightDots){
-            ctx.beginPath();
-            ctx.fillStyle = 'black';
-            ctx.arc(d.x, d.y, d.r, 0, 2*Math.PI);
-            ctx.fill();
-          }
-        },
-        choices: jsPsych.NO_KEYS,
-        trial_duration: stimDuration,
-        data: { trial_type: 'stimulus' },
-        on_finish: function(data) {
-          if (lastSpec) {
-            data.leftCount = lastSpec.leftCount;
-            data.rightCount = lastSpec.rightCount;
-            data.ratio = lastSpec.ratio;
-            data.largerSide = lastSpec.largerSide;
-          }
-        }
-      },
-      // isi
-      {
-        type: 'html-keyboard-response',
-        stimulus: '<div></div>',
-        choices: jsPsych.NO_KEYS,
-        trial_duration: isiDuration,
-        data: { phase: 'isi' }
-      },
-      // response
-      {
-        type: 'html-keyboard-response',
-        stimulus: `
-          <div style="font-size:18px; text-align:center;">
-            <p>Which side had more dots?</p>
-            <p><strong>F</strong> = Left &nbsp;&nbsp;&nbsp; <strong>J</strong> = Right</p>
-          </div>
-        `,
-        choices: responseKeys,
-        response_ends_trial: true,
-        data: { trial_type: 'response' },
-        on_start: function(trial) {
-          if (lastSpec) {
-            trial.data.leftCount = lastSpec.leftCount;
-            trial.data.rightCount = lastSpec.rightCount;
-            trial.data.ratio = lastSpec.ratio;
-            trial.data.largerSide = lastSpec.largerSide;
-          }
-        },
-        on_finish: function(data) {
-          const key = data.response;
-          const left = data.leftCount;
-          const right = data.rightCount;
+/* =======================
+   CONTROL: time + checkpoints
+   ======================= */
+function now(){ return Date.now(); }
 
-          let correct = 0;
-          if (left > right && key === 'f') correct = 1;
-          if (right > left && key === 'j') correct = 1;
+function initTiming(){
+  taskStart = now();
+  blockStart = taskStart;
+  requiredEnd = taskStart + REQUIRED_MINUTES*60000;
+  hardEnd = taskStart + MAX_TOTAL_MINUTES*60000;
+}
 
-          data.accuracy = correct;
-          data.choice = (key === 'f' ? 'left' : 'right');
-        }
-      }
-    ];
+function inHardLimit(){ return now() < hardEnd; }
 
-    timeline.push(trialLoop);
+/* =======================
+   jsPsych setup
+   ======================= */
+jsPsych.data.addProperties({ pid });
 
-    // Optional "continue?" prompt after required portion
-    timeline.push({
-      type: 'html-keyboard-response',
-      stimulus: function() {
-        const now = Date.now();
-        if (now < requiredEndTime && !shouldStopTask) {
-          return `<p style="text-align:center;">Continuing required portion…</p>`;
-        }
-        return `
-          <div style="text-align:center;">
-            <h3>Optional continuation</h3>
-            <p>You have completed the required portion.</p>
-            <p>Press <strong>C</strong> to continue with more trials, or <strong>S</strong> to stop.</p>
-          </div>
-        `;
-      },
-      choices: function() {
-        const now = Date.now();
-        if (now < requiredEndTime && !shouldStopTask) return jsPsych.NO_KEYS;
-        return ['c','s'];
-      },
-      trial_duration: function() {
-        const now = Date.now();
-        if (now < requiredEndTime && !shouldStopTask) return 10; // keep moving until required portion ends
-        return null;
-      },
-      on_finish: function(data) {
-        const now = Date.now();
-        if (now < requiredEndTime && !shouldStopTask) {
-          // keep going; do nothing
-          data.continue_choice = 'required';
-          return;
-        }
-        if (data.response === 's') shouldStopTask = true;
-      }
-    });
+const timeline = [];
 
-    // (loop back) Add another loop block by reusing trialLoop + prompt until stop/hard cap
-    // Simple approach: just run the same loop again by pushing them again while allowed.
-    // For jsPsych 6, easiest is: end naturally by stop/hard cap; optional prompt already sets shouldStopTask.
+/* Instructions */
+timeline.push({
+  type: "html-keyboard-response",
+  stimulus: `
+    <h3>Number Task</h3>
+    <p>Two groups of dots will appear briefly.</p>
+    <p>Press <strong>F</strong> if the <strong>LEFT</strong> side had more dots.</p>
+    <p>Press <strong>J</strong> if the <strong>RIGHT</strong> side had more dots.</p>
+    <p>You can stop at any time using the red <strong>Stop Task</strong> button.</p>
+    <p><em>Press any key to begin.</em></p>
+  `,
+  on_finish: function(){
+    initTiming();
+    document.getElementById("stop-button").style.display = "block";
+  }
+});
 
-    // Final screen
-    timeline.push({
-      type: 'html-keyboard-response',
-      stimulus: `<h3>Thanks — task complete!</h3><p>Press any key to finish.</p>`,
-      choices: jsPsych.ALL_KEYS,
-      on_start: function() {
-        document.getElementById('stop-button').style.display = 'none';
-        clearInterval(timerInterval);
-      }
-    });
+/* One trial = fixation -> dots -> isi -> response */
+function oneTrialTimeline(){
+  return [
+    {
+      type: "html-keyboard-response",
+      stimulus: '<div style="font-size:90px; display:flex; justify-content:center; align-items:center; height:50vh;">+</div>',
+      choices: jsPsych.NO_KEYS,
+      trial_duration: fixationMs,
+      data: { phase: "fixation" }
+    },
+    {
+      type: "canvas-keyboard-response",
+      canvas_size: [canvasW, canvasH],
+      stimulus: function(c){
+        lastSpec = makeTrial();
+        const ctx = c.getContext("2d");
 
-    // Init
-    jsPsych.init({
-      timeline: timeline,
-      display_element: 'jspsych-target',
-      on_finish: function() {
-        // Summary scores
-        const responses = jsPsych.data.get().filter({ trial_type: 'response' });
-        const attempted = responses.count();
-        const correct = responses.filter({ accuracy: 1 }).count();
-        const engagement = correct;
-        const persistence = attempted > 0 ? correct / attempted : 0;
+        ctx.fillStyle = "white";
+        ctx.fillRect(0,0,canvasW,canvasH);
 
-        jsPsych.data.addProperties({
-          attempted, correct, engagement, persistence
+        // divider
+        ctx.strokeStyle = "#cccccc";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(canvasW/2, 0);
+        ctx.lineTo(canvasW/2, canvasH);
+        ctx.stroke();
+
+        // dots
+        ctx.fillStyle = "black";
+        lastSpec.leftDots.forEach(d=>{
+          ctx.beginPath(); ctx.arc(d.x,d.y,d.r,0,2*Math.PI); ctx.fill();
         });
-
-        // optional local save for pilots
-        // jsPsych.data.localSave('csv', 'ans_data.csv');
-
-        // End message (NO redirect)
-        showEndMessage("You may now return to the survey tab.");
+        lastSpec.rightDots.forEach(d=>{
+          ctx.beginPath(); ctx.arc(d.x,d.y,d.r,0,2*Math.PI); ctx.fill();
+        });
+      },
+      choices: jsPsych.NO_KEYS,
+      trial_duration: stimMs,
+      data: {
+        phase: "stimulus"
       }
-    });
-  </script>
+    },
+    {
+      type: "html-keyboard-response",
+      stimulus: "<div></div>",
+      choices: jsPsych.NO_KEYS,
+      trial_duration: isiMs,
+      data: { phase: "isi" }
+    },
+    {
+      type: "html-keyboard-response",
+      stimulus: `
+        <div style="text-align:center; font-size:18px;">
+          <p>Which side had more dots?</p>
+          <p><strong>F</strong> = Left &nbsp;&nbsp;&nbsp; <strong>J</strong> = Right</p>
+        </div>
+      `,
+      choices: responseKeys,
+      data: { trial_type: "response" },
+      on_start: function(trial){
+        if (lastSpec){
+          trial.data.leftCount = lastSpec.leftCount;
+          trial.data.rightCount = lastSpec.rightCount;
+          trial.data.largerSide = lastSpec.largerSide;
+          trial.data.ratio = lastSpec.ratio;
+        }
+      },
+      on_finish: function(data){
+        attempted++;
+
+        const isCorrect =
+          (data.leftCount > data.rightCount && data.response === "f") ||
+          (data.rightCount > data.leftCount && data.response === "j");
+
+        if (isCorrect) correct++;
+
+        // send per-trial row
+        sendRow({
+          pid,
+          row_type: "trial",
+          attempted,
+          correct,
+          leftCount: data.leftCount,
+          rightCount: data.rightCount,
+          largerSide: data.largerSide,
+          ratio: data.ratio,
+          response: data.response,
+          accuracy: isCorrect ? 1 : 0,
+          rt: data.rt,
+          timestamp: now()
+        });
+      }
+    }
+  ];
+}
+
+/* Loop that runs until (a) stop, (b) time checkpoint reached, or (c) hard cap */
+const trialLoop = {
+  timeline: oneTrialTimeline(),
+  loop_function: function(){
+    if (shouldStop) return false;
+    if (!inHardLimit()) return false;
+
+    // stop for checkpoint every minute (after required minute too)
+    const elapsedMs = now() - blockStart;
+    const checkpointMs = CHECKPOINT_EVERY_MIN * 60000;
+
+    // If we reached a checkpoint, break to ask continue/stop
+    if (elapsedMs >= checkpointMs) return false;
+
+    return true;
+  }
+};
+
+/* Checkpoint screen: after each minute */
+timeline.push({
+  timeline: [trialLoop],
+  loop_function: function(){
+    if (shouldStop) return false;
+    if (!inHardLimit()) return false;
+
+    // If still within hard limit, show checkpoint prompt:
+    return true;
+  }
+});
+
+timeline.push({
+  type: "html-keyboard-response",
+  choices: ['c','s'],
+  stimulus: function(){
+    const requiredDone = now() >= requiredEnd;
+
+    // reset block timer for next minute chunk
+    return `
+      <h3>Continue?</h3>
+      <p>You have completed <strong>${Math.floor((now()-taskStart)/60000)} minute(s)</strong> of the task.</p>
+
+      ${requiredDone
+        ? `<p><strong>Optional:</strong> You may continue with more trials, or stop now.</p>`
+        : `<p><strong>Required:</strong> Please continue until you reach at least ${REQUIRED_MINUTES} minute(s).</p>`
+      }
+
+      <p><strong>Press C</strong> to continue.</p>
+      <p><strong>Press S</strong> to stop.</p>
+    `;
+  },
+  on_start: function(){
+    // restart the 1-minute block window
+    blockStart = now();
+  },
+  on_finish: function(data){
+    const requiredDone = now() >= requiredEnd;
+
+    if (data.response === 's' && requiredDone){
+      shouldStop = true;
+    } else if (data.response === 's' && !requiredDone){
+      // ignore stop before required time is done
+      shouldStop = false;
+    } else {
+      shouldStop = false;
+    }
+
+    // If they reached hard cap, force stop
+    if (!inHardLimit()) shouldStop = true;
+  }
+});
+
+/* End + redirect */
+timeline.push({
+  type: "html-keyboard-response",
+  stimulus: "<p>Thanks — returning to the survey…</p>",
+  choices: jsPsych.NO_KEYS,
+  trial_duration: 250,
+  on_start: function(){
+    // stoppedFlag is 1 if they stopped AFTER required time or hit hard cap
+    const stoppedFlag = (now() < hardEnd) ? 1 : 0; // if they stopped early voluntarily => 1
+    sendFinalSummary(stoppedFlag);
+  }
+});
+
+/* INIT */
+jsPsych.init({
+  timeline: timeline,
+  display_element: "jspsych-target",
+  on_finish: function(){
+    // safety fallback (should already redirect in the end screen)
+  }
+});
+
+/* STOP BUTTON (works anytime) */
+document.getElementById("stop-button").onclick = function(){
+  // allow stop immediately if required time has passed; otherwise require continuing
+  if (now() >= requiredEnd){
+    shouldStop = true;
+    sendFinalSummary(1);
+  } else {
+    // If still required: show a gentle message
+    alert("Please complete the required portion before stopping. Thank you!");
+  }
+};
+</script>
 </body>
 </html>

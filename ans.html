@@ -28,7 +28,6 @@
       display: none;
       pointer-events: auto;
     }
-    #stop-button:active { transform: translateX(-50%) scale(0.98); }
   </style>
 </head>
 
@@ -55,14 +54,15 @@ const pid = params.get("pid") || "NO_PID";
 /* =========================
    2) TASK SETTINGS
    ========================= */
-const REQUIRED_MINUTES = 1;   // required block
-const MAX_TOTAL_MINUTES = 10; // cap
+const REQUIRED_MINUTES = 1;
+const MAX_TOTAL_MINUTES = 10;
 const BLOCK_MS = 60 * 1000;
 
 const stimDuration = 700;
 const fixationDuration = 400;
 const isiDuration = 250;
-const responseKeys = ['f','j']; // left/right
+
+const responseKeys = ['f','j'];
 const continueKeys = ['c','C'];
 const stopKeys = ['s','S'];
 
@@ -82,9 +82,7 @@ const ratios = [1.1, 1.2, 1.5, 2];
 let attempted = 0;
 let correct = 0;
 let lastSpec = null;
-
 let shouldStopTask = false;
-let inChoiceScreen = false;
 
 /* =========================
    4) UTIL HELPERS
@@ -95,7 +93,6 @@ function rint(min, max) {
 function choice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function postRow(row) {
-  // fire-and-forget
   try {
     fetch(DATA_ENDPOINT, {
       method: "POST",
@@ -106,14 +103,12 @@ function postRow(row) {
 }
 
 function finalizeAndReturn(ans_done_flag, stopped_reason) {
-  // prevent double-fire
   if (window.__FINALIZED__) return;
   window.__FINALIZED__ = true;
 
-  const engagement = correct; // you defined this
+  const engagement = correct;
   const persistence = attempted > 0 ? (correct / attempted) : 0;
 
-  // optional “final summary” row to sheet
   postRow({
     pid,
     event: "SUMMARY",
@@ -139,7 +134,7 @@ function finalizeAndReturn(ans_done_flag, stopped_reason) {
 }
 
 /* =========================
-   5) DOT GENERATION (your logic)
+   5) DOT GENERATION
    ========================= */
 function generateDotPositions(count, bbox, radiiRange, minSpacing, maxAttemptsPerDot=300) {
   const dots = [];
@@ -216,7 +211,7 @@ function makeTrial() {
 }
 
 /* =========================
-   6) TRIAL "UNIT" TIMELINE
+   6) ONE TRIAL TIMELINE
    ========================= */
 function oneTrialTimeline() {
   return [
@@ -229,28 +224,42 @@ function oneTrialTimeline() {
     {
       type: "canvas-keyboard-response",
       canvas_size: [canvasSize.w, canvasSize.h],
-      stimulus: function(c){
+
+      // IMPORTANT FIX: v6 expects stimulus -> returns function(canvas){...}
+      stimulus: function() {
         lastSpec = makeTrial();
-        const ctx = c.getContext('2d');
-        ctx.clearRect(0,0,c.width,c.height);
-        ctx.fillStyle = "white";
-        ctx.fillRect(0,0,c.width,c.height);
 
-        ctx.strokeStyle = "#cccccc";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(c.width/2, 0);
-        ctx.lineTo(c.width/2, c.height);
-        ctx.stroke();
+        return function(c) {
+          const ctx = c.getContext("2d");
+          ctx.clearRect(0,0,c.width,c.height);
 
-        ctx.fillStyle = "black";
-        for (const d of lastSpec.leftDots) {
-          ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 2*Math.PI); ctx.fill();
-        }
-        for (const d of lastSpec.rightDots) {
-          ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 2*Math.PI); ctx.fill();
-        }
+          // background
+          ctx.fillStyle = "white";
+          ctx.fillRect(0,0,c.width,c.height);
+
+          // divider
+          ctx.strokeStyle = "#cccccc";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(c.width/2, 0);
+          ctx.lineTo(c.width/2, c.height);
+          ctx.stroke();
+
+          // dots
+          ctx.fillStyle = "black";
+          for (const d of lastSpec.leftDots) {
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, d.r, 0, 2*Math.PI);
+            ctx.fill();
+          }
+          for (const d of lastSpec.rightDots) {
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, d.r, 0, 2*Math.PI);
+            ctx.fill();
+          }
+        };
       },
+
       choices: jsPsych.NO_KEYS,
       trial_duration: stimDuration
     },
@@ -270,7 +279,6 @@ function oneTrialTimeline() {
       `,
       choices: responseKeys,
       on_start: function() {
-        // ensure keyboard focus for this trial
         setTimeout(() => window.focus(), 0);
         setTimeout(() => document.body.focus(), 0);
       },
@@ -287,7 +295,6 @@ function oneTrialTimeline() {
         }
         if (isCorrect) correct++;
 
-        // trial-level row to Sheet
         postRow({
           pid,
           event: "TRIAL",
@@ -307,11 +314,10 @@ function oneTrialTimeline() {
 }
 
 /* =========================
-   7) BUILD BLOCKS: required + optional
+   7) BUILD BLOCKS
    ========================= */
 const timeline = [];
 
-// instructions
 timeline.push({
   type: "html-keyboard-response",
   stimulus: `
@@ -326,7 +332,7 @@ timeline.push({
   on_finish: () => { window.focus(); }
 });
 
-function blockTimeline(blockIndex, isRequired) {
+function blockTimeline(isRequired) {
   const blockStart = Date.now();
   const blockEnd = blockStart + BLOCK_MS;
 
@@ -340,7 +346,6 @@ function blockTimeline(blockIndex, isRequired) {
 
   const out = [blockLoop];
 
-  // After the block, if required is done or optional: show continue/stop screen
   out.push({
     type: "html-keyboard-response",
     stimulus: isRequired
@@ -354,37 +359,33 @@ function blockTimeline(blockIndex, isRequired) {
          </p>`,
     choices: continueKeys.concat(stopKeys),
     on_start: function() {
-      inChoiceScreen = true;
-      // force focus so keypress works
       setTimeout(() => window.focus(), 0);
       setTimeout(() => document.body.focus(), 0);
     },
     on_finish: function(data) {
-      inChoiceScreen = false;
-
       const k = data.response;
       if (stopKeys.includes(k)) {
         shouldStopTask = true;
         finalizeAndReturn(0, "choice_screen_stop_key");
       }
-      // if C -> just continue (timeline continues)
+      // if C -> continue
     }
   });
 
   return out;
 }
 
-// Build required blocks
+// required blocks
 for (let i = 0; i < REQUIRED_MINUTES; i++) {
-  timeline.push(...blockTimeline(i+1, true));
+  timeline.push(...blockTimeline(true));
 }
 
-// Build optional blocks up to MAX_TOTAL_MINUTES
+// optional blocks
 for (let j = REQUIRED_MINUTES; j < MAX_TOTAL_MINUTES; j++) {
-  timeline.push(...blockTimeline(j+1, false));
+  timeline.push(...blockTimeline(false));
 }
 
-// If they make it to the end without stopping:
+// if they reach max
 timeline.push({
   type: "html-keyboard-response",
   stimulus: "<p style='text-align:center; font-size:18px;'>All done — returning to the survey…</p>",
@@ -396,18 +397,17 @@ timeline.push({
 });
 
 /* =========================
-   8) INIT + STOP BUTTON (works any time)
+   8) INIT + STOP BUTTON
    ========================= */
 jsPsych.init({
   timeline,
   display_element: "jspsych-target",
   on_finish: function() {
-    // If jsPsych finishes naturally and we haven't redirected yet:
     if (!window.__FINALIZED__) finalizeAndReturn(1, "jspsych_on_finish");
   }
 });
 
-// stop button click (forced navigation)
+// stop button
 const stopBtn = document.getElementById("stop-button");
 stopBtn.style.display = "block";
 stopBtn.addEventListener("click", () => {
@@ -415,14 +415,13 @@ stopBtn.addEventListener("click", () => {
   finalizeAndReturn(0, "stop_button_click");
 });
 
-// global keyboard safety: if they hit "s" anywhere, stop.
+// global S key safety
 document.addEventListener("keydown", (e) => {
   if (e.key === "s" || e.key === "S") {
     shouldStopTask = true;
     finalizeAndReturn(0, "global_s_key");
   }
 });
-
 </script>
 </body>
 </html>
